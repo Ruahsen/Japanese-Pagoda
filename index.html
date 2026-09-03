@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Japanese Pagoda Garden</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0b1226; }
+  canvas { display: block; }
+  #ui {
+    position: fixed; top: 16px; left: 16px; z-index: 10;
+    font: 13px/1.4 "Segoe UI", system-ui, -apple-system, sans-serif;
+    display: flex; flex-direction: column; gap: 8px; align-items: flex-start;
+  }
+  .row { display: flex; gap: 8px; }
+  button {
+    cursor: pointer; color: #fff; font: inherit; letter-spacing: .3px;
+    padding: 9px 14px; border-radius: 10px;
+    border: 1px solid rgba(255,255,255,.25);
+    background: rgba(20,28,48,.55); backdrop-filter: blur(8px);
+    box-shadow: 0 4px 16px rgba(0,0,0,.28);
+    transition: background .18s, transform .12s, border-color .18s;
+  }
+  button:hover { background: rgba(45,60,95,.7); border-color: rgba(255,255,255,.45); }
+  button:active { transform: translateY(1px) scale(.98); }
+  #hint { color: rgba(255,255,255,.7); text-shadow: 0 1px 3px rgba(0,0,0,.6); padding-left: 2px; }
+  @media (max-width: 560px) { #hint { display: none; } }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <div class="row">
+    <button id="btnDay">☾ Night</button>
+    <button id="btnReset">Reset Camera</button>
+  </div>
+  <div id="hint">Drag rotate · Scroll zoom · Right-drag pan</div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ---------------- deterministic rng ---------------- */
+let _s = 20260401;
+const rng = () => ((_s = (_s * 1664525 + 1013904223) % 4294967296) / 4294967296);
+
+/* ---------------- renderer / scene / camera ---------------- */
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0xd8ecff, 45, 150);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 600);
+const HOME_POS = new THREE.Vector3(27, 16, 31);
+const HOME_TGT = new THREE.Vector3(0, 6, 0);
+camera.position.copy(HOME_POS);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.copy(HOME_TGT);
+controls.enableDamping = true;
+controls.dampingFactor = 0.07;
+controls.minDistance = 9;
+controls.maxDistance = 95;
+controls.maxPolarAngle = Math.PI * 0.492;
+controls.update();
+
+/* ---------------- sky dome ---------------- */
+const skyUniforms = {
+  top:    { value: new THREE.Color(0x3f86d0) },
+  bottom: { value: new THREE.Color(0xdcefff) },
+  offset: { value: 25 },
+  exp:    { value: 0.75 }
+};
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(260, 32, 16),
+  new THREE.ShaderMaterial({
+    uniforms: skyUniforms, side: THREE.BackSide, depthWrite: false,
+    vertexShader: `varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `
+      uniform vec3 top; uniform vec3 bottom; uniform float offset; uniform float exp; varying vec3 vP;
+      void main(){ float h = normalize(vP + vec3(0.0, offset, 0.0)).y;
+      gl_FragColor = vec4(mix(bottom, top, pow(max(h, 0.0), exp)), 1.0); }`
+  })
+);
+scene.add(sky);
+
+/* ---------------- stars (visible at night) ---------------- */
+const starPos = new Float32Array(700 * 3);
+for (let i = 0; i < 700; i++) {
+  const u = rng() * 2 - 1, a = rng() * Math.PI * 2, r = 230, s = Math.sqrt(1 - u * u);
+  starPos[i * 3] = Math.cos(a) * s * r;
+  starPos[i * 3 + 1] = Math.abs(u) * r * 0.9 + 8;
+  starPos[i * 3 + 2] = Math.sin(a) * s * r;
+}
+const starGeo = new THREE.BufferGeometry();
+starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+const starMat = new THREE.PointsMaterial({
+  color: 0xffffff, size: 1.6, sizeAttenuation: false,
+  transparent: true, opacity: 0, depthWrite: false, fog: false
+});
+scene.add(new THREE.Points(starGeo, starMat));
+
+/* ---------------- sun / moon disc ---------------- */
+const orbMat = new THREE.MeshBasicMaterial({ color: 0xfff4dd, fog: false });
+const orb = new THREE.Mesh(new THREE.SphereGeometry(7, 20, 14), orbMat);
+scene.add(orb);
+
+/* ---------------- lights ---------------- */
+const hemi = new THREE.HemisphereLight(0x9fc6ff, 0x5a7a44, 0.85);
+scene.add(hemi);
+const ambient = new THREE.AmbientLight(0xffffff, 0.25);
+scene.add(ambient);
+
+const sun = new THREE.DirectionalLight(0xfff1d6, 2.4);
+sun.position.set(20, 28, 14);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.near = 1;
+sun.shadow.camera.far = 130;
+sun.shadow.bias = -0.0006;
+sun.shadow.normalBias = 0.02;
+const sc = sun.shadow.camera;
+sc.left = -34; sc.right = 34; sc.top = 34; sc.bottom = -34;
+sc.updateProjectionMatrix();
+scene.add(sun);
+
+/* ---------------- shared materials ---------------- */
+const M = {
+  roof:      new THREE.MeshStandardMaterial({ color: 0x3d4552, roughness: 0.8, metalness: 0.05, flatShading: true, side: THREE.DoubleSide }),
+  wall:      new THREE.MeshStandardMaterial({ color: 0xe0d5bb, roughness: 0.9 }),
+  pillar:    new THREE.MeshStandardMaterial({ color: 0xa8462c, roughness: 0.75 }),
+  beam:      new THREE.MeshStandardMaterial({ color: 0x8d3a25, roughness: 0.75 }),
+  stone:     new THREE.MeshStandardMaterial({ color: 0x9d9a92, roughness: 0.95, flatShading: true }),
+  darkStone: new THREE.MeshStandardMaterial({ color: 0x6e6b64, roughness: 0.95, flatShading: true }),
+  bark:      new THREE.MeshStandardMaterial({ color: 0x6b4a34, roughness: 0.95, flatShading: true }),
+  wood:      new THREE.MeshStandardMaterial({ color: 0x7a5533, roughness: 0.85 }),
+  metal:     new THREE.MeshStandardMaterial({ color: 0xc9a227, roughness: 0.35, metalness: 0.85 }),
+  window:    new THREE.MeshStandardMaterial({ color: 0x2b241c, roughness: 0.6 }),
+  lantern:   new THREE.MeshStandardMaterial({ color: 0x3a3a38, roughness: 0.9, emissive: 0xffb45c, emissiveIntensity: 0 }),
+  glow:      new THREE.MeshStandardMaterial({ color: 0xffe6bd, emissive: 0xffb45c, emissiveIntensity: 0, roughness: 1 })
+};
+const blossomMats = [
+  new THREE.MeshStandardMaterial({ color: 0xffc2d6, roughness: 0.85, flatShading: true }),
+  new THREE.MeshStandardMaterial({ color: 0xffd9e6, roughness: 0.85, flatShading: true }),
+  new THREE.MeshStandardMaterial({ color: 0xf7a8c4, roughness: 0.85, flatShading: true })
+];
+
+/* ---------------- curved pagoda roof (4-sided lathe) ---------------- */
+function makeRoof(radius, height) {
+  const pts = [], N = 9;
+  for (let i = 0; i <= N; i++) {
+    const t = i / N;
+    const r = Math.max(0.0015, radius * t);
+    const y = height * Math.pow(1 - t, 1.7) + 0.18 * height * Math.pow(t, 3);
+    pts.push(new THREE.Vector2(r, y));
+  }
+  const g = new THREE.LatheGeometry(pts, 4);
+  g.rotateY(Math.PI / 4);
+  g.computeVertexNormals();
+  return g;
+}
+
+/* ---------------- pagoda: 5 levels + spire ---------------- */
+const pagoda = new THREE.Group();
+scene.add(pagoda);
+
+{
+  const plinth = new THREE.Mesh(new THREE.BoxGeometry(8.6, 0.7, 8.6), M.darkStone);
+  plinth.position.y = 0.35; plinth.castShadow = true; plinth.receiveShadow = true;
+  pagoda.add(plinth);
+
+  const step = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.36, 1.5), M.stone);
+  step.position.set(0, 0.18, 5.0); step.castShadow = true; step.receiveShadow = true;
+  pagoda.add(step);
+
+  let y = 0.7;
+  const baseW = 6.0, baseH = 2.5;
+
+  for (let i = 0; i < 5; i++) {
+    const k = Math.pow(0.865, i);
+    const w = baseW * k;
+    const bh = baseH * Math.pow(0.9, i);
+    const roofR = w * 1.02;
+    const roofH = 1.75 * Math.pow(k, 0.55);
+
+    // balcony floor
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(w * 1.10, 0.3, w * 1.10), M.stone);
+    slab.position.y = y + 0.15; slab.castShadow = true; slab.receiveShadow = true;
+    pagoda.add(slab);
+    y += 0.3;
+
+    // railing
+    const railY = y + 0.55;
+    const railOff = w * 0.5, railLen = w * 1.0;
+    for (const [sx, sz, rot] of [[0, railOff, 0], [0, -railOff, 0], [railOff, 0, Math.PI / 2], [-railOff, 0, Math.PI / 2]]) {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(railLen, 0.12, 0.12), M.pillar);
+      bar.position.set(sx, railY, sz); bar.rotation.y = rot; bar.castShadow = true;
+      pagoda.add(bar);
+    }
+
+    // core wall
+    const core = new THREE.Mesh(new THREE.BoxGeometry(w * 0.68, bh, w * 0.68), M.wall);
+    core.position.y = y + bh / 2; core.castShadow = true; core.receiveShadow = true;
+    pagoda.add(core);
+
+    // pillars
+    const pRad = 0.15 * Math.pow(k, 0.4), off = w * 0.42;
+    for (const px of [-off, 0, off]) for (const pz of [-off, off]) {
+      const p = new THREE.Mesh(new THREE.CylinderGeometry(pRad * 0.88, pRad, bh, 8), M.pillar);
+      p.position.set(px, y + bh / 2, pz); p.castShadow = true; pagoda.add(p);
+    }
+
+    // lattice windows
+    const ww = w * 0.3, wh = bh * 0.34;
+    for (const [dx, dz, ry] of [[0, w * 0.345, 0], [0, -w * 0.345, 0], [w * 0.345, 0, Math.PI / 2], [-w * 0.345, 0, Math.PI / 2]]) {
+      const win = new THREE.Mesh(new THREE.BoxGeometry(ww, wh, 0.08), M.window);
+      win.position.set(dx, y + bh * 0.55, dz); win.rotation.y = ry;
+      pagoda.add(win);
+    }
+
+    // top beam + corner brackets
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(w * 1.02, 0.16, w * 1.02), M.beam);
+    beam.position.y = y + bh; beam.castShadow = true;
+    pagoda.add(beam);
+    for (const bx of [-1, 1]) for (const bz of [-1, 1]) {
+      const br = new THREE.Mesh(new THREE.BoxGeometry(0.5 * k + 0.2, 0.22, 0.22), M.wood);
+      br.position.set(bx * w * 0.34, y + bh - 0.2, bz * w * 0.34);
+      br.rotation.y = Math.PI / 4;
+      pagoda.add(br);
+    }
+
+    // curved roof
+    const roof = new THREE.Mesh(makeRoof(roofR, roofH), M.roof);
+    roof.position.y = y + bh; roof.castShadow = true; roof.receiveShadow = true;
+    pagoda.add(roof);
+
+    y += bh + roofH * 0.32;
+  }
+
+  // sorin (spire)
+  const spire = new THREE.Group();
+  spire.position.y = y + 0.1;
+  pagoda.add(spire);
+
+  const bowl = new THREE.Mesh(new THREE.SphereGeometry(0.42, 16, 12), M.metal);
+  bowl.scale.y = 0.7; bowl.position.y = 0.2;
+  spire.add(bowl);
+
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.1, 3.8, 8), M.metal);
+  pole.position.y = 2.1; pole.castShadow = true;
+  spire.add(pole);
+
+  for (let i = 0; i < 5; i++) {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.44 - i * 0.07, 0.045, 6, 18), M.metal);
+    ring.rotation.x = Math.PI / 2; ring.position.y = 0.75 + i * 0.62;
+    spire.add(ring);
+  }
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.55, 8), M.metal);
+  flame.position.y = 4.25; flame.castShadow = true;
+  spire.add(flame);
+}
+
+/* ---------------- ground, plaza, grass tufts ---------------- */
+const POND = { x: 16, z: 10, r: 6.6 };
+
+{
+  const gGeo = new THREE.CircleGeometry(150, 72);
+  gGeo.rotateX(-Math.PI / 2);
+  const p = gGeo.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), z = p.getZ(i);
+    p.setY(i, Math.sin(x * 0.07) * Math.cos(z * 0.06) * 0.55 + Math.sin(x * 0.021 + z * 0.017) * 1.1);
+  }
+  gGeo.computeVertexNormals();
+  const ground = new THREE.Mesh(gGeo, new THREE.MeshStandardMaterial({ color: 0x5d8a45, roughness: 1 }));
+  ground.position.y = -0.02; ground.receiveShadow = true;
+  scene.add(ground);
+
+  const plaza = new THREE.Mesh(new THREE.CircleGeometry(9.4, 56), new THREE.MeshStandardMaterial({ color: 0xb9b09a, roughness: 1 }));
+  plaza.rotation.x = -Math.PI / 2; plaza.position.y = 0.02; plaza.receiveShadow = true;
+  scene.add(plaza);
+
+  const tuftGeo = new THREE.ConeGeometry(0.13, 0.55, 4, 1);
+  tuftGeo.translate(0, 0.27, 0);
+  const tufts = new THREE.InstancedMesh(tuftGeo, new THREE.MeshStandardMaterial({ color: 0x6f9c46, roughness: 1 }), 620);
+  const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sv = new THREE.Vector3(), pv = new THREE.Vector3();
+  const axis = new THREE.Vector3(0, 1, 0);
+  let n = 0;
+  while (n < 620) {
+    const a = rng() * Math.PI * 2, r = 10 + rng() * 55;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    if ((x - POND.x) ** 2 + (z - POND.z) ** 2 < (POND.r + 2.5) ** 2) continue;
+    q.setFromAxisAngle(axis, rng() * 6.283);
+    const s = 0.7 + rng() * 1.1;
+    sv.set(s, s * (0.8 + rng() * 0.8), s);
+    mtx.compose(pv.set(x, 0, z), q, sv);
+    tufts.setMatrixAt(n++, mtx);
+  }
+  tufts.instanceMatrix.needsUpdate = true;
+  scene.add(tufts);
+}
+
+/* ---------------- pond ---------------- */
+const waterGeo = new THREE.CircleGeometry(POND.r, 56);
+waterGeo.rotateX(-Math.PI / 2);
+const waterBase = waterGeo.attributes.position.clone();
+const water = new THREE.Mesh(waterGeo, new THREE.MeshStandardMaterial({
+  color: 0x2e6b86, roughness: 0.12, metalness: 0.4, transparent: true, opacity: 0.88
+}));
+water.position.set(POND.x, 0.06, POND.z);
+scene.add(water);
+
+{
+  const bed = new THREE.Mesh(new THREE.CircleGeometry(POND.r + 0.4, 48), new THREE.MeshStandardMaterial({ color: 0x4a4232, roughness: 1 }));
+  bed.rotation.x = -Math.PI / 2; bed.position.set(POND.x, -0.12, POND.z); bed.receiveShadow = true;
+  scene.add(bed);
+
+  const pebble = new THREE.IcosahedronGeometry(1, 0);
+  for (let i = 0; i < 34; i++) {
+    const a = (i / 34) * Math.PI * 2 + rng() * 0.1;
+    const r = POND.r + 0.35 + rng() * 0.45;
+    const m = new THREE.Mesh(pebble, rng() > 0.5 ? M.stone : M.darkStone);
+    m.position.set(POND.x + Math.cos(a) * r, 0.06, POND.z + Math.sin(a) * r);
+    m.scale.set(0.28 + rng() * 0.34, 0.18 + rng() * 0.2, 0.28 + rng() * 0.34);
+    m.rotation.set(rng() * 3, rng() * 3, rng() * 3);
+    m.castShadow = true; m.receiveShadow = true;
+    scene.add(m);
+  }
+
+  for (let i = 0; i < 5; i++) {
+    const t = i / 4 - 0.5;
+    const st = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.66, 0.16, 9), M.stone);
+    st.position.set(POND.x + t * 7.4 + (rng() - 0.5) * 0.5, 0.16, POND.z - 1.6 + Math.cos(t * 3) * 2.4);
+    st.rotation.y = rng() * 3; st.scale.set(1, 1, 0.75);
+    st.castShadow = true; st.receiveShadow = true;
+    scene.add(st);
+  }
+}
+
+/* ---------------- rocks ---------------- */
+{
+  const rockGeo = new THREE.DodecahedronGeometry(1, 0);
+  for (let i = 0; i < 16; i++) {
+    const a = rng() * Math.PI * 2, r = 11 + rng() * 34;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    if ((x - POND.x) ** 2 + (z - POND.z) ** 2 < (POND.r + 1.6) ** 2) continue;
+    const s = 0.35 + rng() * 1.25;
+    const m = new THREE.Mesh(rockGeo, rng() > 0.45 ? M.stone : M.darkStone);
+    m.position.set(x, s * 0.32, z);
+    m.scale.set(s, s * (0.5 + rng() * 0.5), s * (0.75 + rng() * 0.5));
+    m.rotation.set(rng() * 3, rng() * 3, rng() * 3);
+    m.castShadow = true; m.receiveShadow = true;
+    scene.add(m);
+  }
+}
+
+/* ---------------- cherry blossom trees ---------------- */
+const trees = new THREE.Group();
+{
+  const blossomGeo = new THREE.IcosahedronGeometry(1, 1);
+  const trunkGeo = [], branchGeo = [];
+  function makeTree(scale) {
+    const g = new THREE.Group();
+    const h = (2.3 + rng() * 1.7) * scale;
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.13 * scale, 0.3 * scale, h, 7), M.bark);
+    trunk.position.y = h / 2; trunk.castShadow = true;
+    g.add(trunk);
+
+    for (let i = 0; i < 3; i++) {
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.05 * scale, 0.11 * scale, h * 0.55, 5), M.bark);
+      const a = rng() * 6.283;
+      b.position.set(Math.cos(a) * 0.32 * scale, h * 0.82, Math.sin(a) * 0.32 * scale);
+      b.rotation.set(Math.cos(a) * 0.6, 0, -Math.sin(a) * 0.6);
+      b.castShadow = true;
+      g.add(b);
+    }
+
+    const clumps = 5 + Math.floor(rng() * 3);
+    for (let i = 0; i < clumps; i++) {
+      const r = (0.75 + rng() * 0.85) * scale;
+      const b = new THREE.Mesh(blossomGeo, blossomMats[Math.floor(rng() * 3)]);
+      b.position.set((rng() - 0.5) * 2.4 * scale, h * (0.72 + rng() * 0.55), (rng() - 0.5) * 2.4 * scale);
+      b.scale.set(r, r * 0.72, r);
+      b.rotation.set(rng() * 3, rng() * 3, rng() * 3);
+      b.castShadow = true;
+      g.add(b);
+    }
+    g.userData.sway = 0.4 + rng() * 0.8;
+    return g;
+  }
+
+  const spots = [[-16, -12, 1.25], [-22, 6, 1.0], [-9, 16, 1.15], [12, -18, 1.1],
+                 [24, -8, 0.9], [26, 20, 1.2], [-30, 20, 1.05], [4, 26, 1.15],
+                 [-6, -26, 0.95], [34, 2, 1.0]];
+  for (const [x, z, s] of spots) {
+    const t = makeTree(s);
+    t.position.set(x + (rng() - 0.5) * 2, 0, z + (rng() - 0.5) * 2);
+    if ((t.position.x - POND.x) ** 2 + (t.position.z - POND.z) ** 2 < (POND.r + 3) ** 2) continue;
+    trees.add(t);
+  }
+  scene.add(trees);
+}
+
+/* ---------------- stone lanterns ---------------- */
+const lanternLights = [];
+{
+  function makeLantern() {
+    const g = new THREE.Group();
+    const parts = [
+      [new THREE.CylinderGeometry(0.55, 0.62, 0.22, 8), 0.11, M.darkStone],
+      [new THREE.CylinderGeometry(0.16, 0.19, 1.05, 8), 0.74, M.stone],
+      [new THREE.CylinderGeometry(0.5, 0.42, 0.14, 8), 1.33, M.stone]
+    ];
+    for (const [geo, py, mat] of parts) {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.y = py; m.castShadow = true; m.receiveShadow = true;
+      g.add(m);
+    }
+    const box = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.6, 0.62), M.lantern);
+    box.position.y = 1.7; box.castShadow = true;
+    g.add(box);
+    const core = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.4, 0.42), M.glow);
+    core.position.y = 1.7;
+    g.add(core);
+    const cap = new THREE.Mesh(makeRoof(0.78, 0.42), M.darkStone);
+    cap.position.y = 2.0; cap.castShadow = true;
+    g.add(cap);
+    const fin = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), M.stone);
+    fin.position.y = 2.48;
+    g.add(fin);
+
+    const pl = new THREE.PointLight(0xffb45c, 0, 11, 2);
+    pl.position.y = 1.7;
+    g.add(pl);
+    lanternLights.push(pl);
+    return g;
+  }
+
+  const spots = [[7.6, 7.6], [-7.6, 7.6], [7.6, -7.6], [-7.6, -7.6], [0, 11.6], [11.5, 17.5]];
+  for (const [x, z] of spots) {
+    const l = makeLantern();
+    l.position.set(x, 0, z);
+    l.rotation.y = rng() * 0.6;
+    scene.add(l);
+  }
+}
+
+/* ---------------- falling petals ---------------- */
+const petals = (() => {
+  const COUNT = 850;
+  const pos = new Float32Array(COUNT * 3);
+  const data = new Array(COUNT);
+  const reset = (i, high) => {
+    const x = (rng() - 0.5) * 78, z = (rng() - 0.5) * 78;
+    pos[i * 3] = x;
+    pos[i * 3 + 1] = high ? rng() * 26 : 18 + rng() * 10;
+    pos[i * 3 + 2] = z;
+    data[i] = { bx: x, vy: 0.55 + rng() * 1.0, sw: 0.5 + rng() * 1.1, ph: rng() * 6.283, amp: 0.7 + rng() * 1.8 };
+  };
+  for (let i = 0; i < COUNT; i++) reset(i, true);
+
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const ctx = c.getContext('2d');
+  ctx.translate(32, 32); ctx.rotate(0.5);
+  const grd = ctx.createRadialGradient(0, 0, 2, 0, 0, 28);
+  grd.addColorStop(0, 'rgba(255,232,242,1)');
+  grd.addColorStop(0.65, 'rgba(255,190,216,0.85)');
+  grd.addColorStop(1, 'rgba(255,170,205,0.05)');
+  ctx.fillStyle = grd;
+  ctx.beginPath(); ctx.ellipse(0, 0, 25, 13, 0, 0, Math.PI * 2); ctx.fill();
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({
+    map: tex, size: 0.42, sizeAttenuation: true,
+    transparent: true, depthWrite: false, opacity: 0.95, alphaTest: 0.02
+  });
+  const pts = new THREE.Points(geo, mat);
+  pts.frustumCulled = false;
+  scene.add(pts);
+
+  return {
+    mat,
+    update(t, dt) {
+      for (let i = 0; i < COUNT; i++) {
+        const d = data[i];
+        pos[i * 3 + 1] -= d.vy * dt;
+        pos[i * 3] = d.bx + Math.sin(t * d.sw + d.ph) * d.amp;
+        pos[i * 3 + 2] += Math.cos(t * d.sw * 0.6 + d.ph) * dt * 0.5;
+        if (pos[i * 3 + 1] < -0.5) reset(i, false);
+      }
+      geo.attributes.position.needsUpdate = true;
+    }
+  };
+})();
+
+/* ---------------- day / night palettes ---------------- */
+const DAY = {
+  skyTop: new THREE.Color(0x3f86d0), skyBot: new THREE.Color(0xdcefff), fog: new THREE.Color(0xd8ecff),
+  dir: new THREE.Color(0xfff1d6), dirI: 2.4, hemiS: new THREE.Color(0x9fc6ff), hemiG: new THREE.Color(0x5a7a44),
+  hemiI: 0.85, ambI: 0.25, pos: new THREE.Vector3(20, 28, 14), orb: new THREE.Color(0xfff4dd),
+  exposure: 1.05, star: 0
+};
+const NIGHT = {
+  skyTop: new THREE.Color(0x040a1c), skyBot: new THREE.Color(0x18294c), fog: new THREE.Color(0x0c1730),
+  dir: new THREE.Color(0x9fb6ff), dirI: 0.5, hemiS: new THREE.Color(0x1d2f60), hemiG: new THREE.Color(0x0a1a12),
+  hemiI: 0.38, ambI: 0.13, pos: new THREE.Vector3(-18, 26, -13), orb: new THREE.Color(0xdfe9ff),
+  exposure: 1.25, star: 0.95
+};
+
+let night = 0, nightTarget = 0;
+
+function applyTime() {
+  const n = night;
+  skyUniforms.top.value.lerpColors(DAY.skyTop, NIGHT.skyTop, n);
+  skyUniforms.bottom.value.lerpColors(DAY.skyBot, NIGHT.skyBot, n);
+  scene.fog.color.lerpColors(DAY.fog, NIGHT.fog, n);
+
+  sun.color.lerpColors(DAY.dir, NIGHT.dir, n);
+  sun.intensity = THREE.MathUtils.lerp(DAY.dirI, NIGHT.dirI, n);
+  sun.position.lerpVectors(DAY.pos, NIGHT.pos, n);
+
+  hemi.color.lerpColors(DAY.hemiS, NIGHT.hemiS, n);
+  hemi.groundColor.lerpColors(DAY.hemiG, NIGHT.hemiG, n);
+  hemi.intensity = THREE.MathUtils.lerp(DAY.hemiI, NIGHT.hemiI, n);
+  ambient.intensity = THREE.MathUtils.lerp(DAY.ambI, NIGHT.ambI, n);
+
+  M.lantern.emissiveIntensity = n * 1.5;
+  M.glow.emissiveIntensity = n * 2.6;
+  for (const l of lanternLights) l.intensity = n * 14;
+
+  starMat.opacity = n * NIGHT.star;
+  starMat.visible = n > 0.02;
+  orbMat.color.lerpColors(DAY.orb, NIGHT.orb, n);
+  orb.position.copy(sun.position).normalize().multiplyScalar(200);
+  orb.scale.setScalar(THREE.MathUtils.lerp(1, 0.72, n));
+
+  renderer.toneMappingExposure = THREE.MathUtils.lerp(DAY.exposure, NIGHT.exposure, n);
+  petals.mat.opacity = THREE.MathUtils.lerp(0.95, 0.6, n);
+}
+applyTime();
+
+const btnDay = document.getElementById('btnDay');
+btnDay.addEventListener('click', () => {
+  nightTarget = nightTarget > 0.5 ? 0 : 1;
+  btnDay.textContent = nightTarget ? '☀ Day' : '☾ Night';
+});
+
+/* ---------------- reset camera ---------------- */
+let camAnim = 0;
+document.getElementById('btnReset').addEventListener('click', () => { camAnim = 0.0001; });
+
+/* ---------------- loop ---------------- */
+const clock = new THREE.Clock();
+let t = 0;
+
+function animate() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  t += dt;
+
+  if (Math.abs(night - nightTarget) > 0.0005) {
+    night += (nightTarget - night) * Math.min(1, dt * 2.2);
+    applyTime();
+  }
+
+  if (camAnim > 0) {
+    camAnim = Math.min(1, camAnim + dt * 1.6);
+    const e = 1 - Math.pow(1 - camAnim, 3);
+    camera.position.lerp(HOME_POS, e * 0.14 + 0.02);
+    controls.target.lerp(HOME_TGT, e * 0.14 + 0.02);
+    if (camAnim >= 1 && camera.position.distanceTo(HOME_POS) < 0.05) camAnim = 0;
+  }
+
+  // water ripples
+  const wp = water.geometry.attributes.position;
+  for (let i = 0; i < wp.count; i++) {
+    const x = waterBase.getX(i), z = waterBase.getZ(i);
+    wp.setY(i, Math.sin(x * 0.55 + t * 1.1) * 0.045 + Math.cos(z * 0.6 - t * 0.9) * 0.045);
+  }
+  wp.needsUpdate = true;
+
+  // tree sway
+  for (const tr of trees.children) tr.rotation.z = Math.sin(t * 0.7 + tr.position.x) * 0.012 * tr.userData.sway;
+
+  petals.update(t, dt);
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+animate();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
